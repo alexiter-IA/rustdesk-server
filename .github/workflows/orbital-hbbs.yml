@@ -1,0 +1,50 @@
+name: Orbital hbbs (clave de operador)
+
+# Compila hbbs con el control de "clave de operador": solo los clientes que envian
+# ORBITAL_OP_TOKEN pueden INICIAR conexiones (PunchHoleRequest / RequestRelay).
+# Si la variable de entorno no esta definida en el servidor, se comporta como el original.
+# Binario estatico (musl) para que no dependa de la version de glibc del servidor.
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build-hbbs-amd64:
+    runs-on: ubuntu-22.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Comprobar que el parche esta presente
+        run: |
+          grep -n "orbital_op_token" src/rendezvous_server.rs
+          test "$(grep -c 'orbital_op_token' src/rendezvous_server.rs)" -ge 3
+
+      - name: Install Rust toolchain
+        uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: x86_64-unknown-linux-musl
+
+      - name: Install musl tools
+        run: |
+          sudo apt-get update -y
+          sudo apt-get install -y musl-tools
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: Build hbbs + hbbr
+        run: cargo build --release --all-features --target=x86_64-unknown-linux-musl --bin hbbs --bin hbbr
+
+      - name: Info de los binarios
+        run: |
+          chmod -v a+x target/x86_64-unknown-linux-musl/release/hbb*
+          ls -l target/x86_64-unknown-linux-musl/release/hbbs target/x86_64-unknown-linux-musl/release/hbbr
+          file target/x86_64-unknown-linux-musl/release/hbbs
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: orbital-hbbs-amd64
+          path: |
+            target/x86_64-unknown-linux-musl/release/hbbs
+            target/x86_64-unknown-linux-musl/release/hbbr
