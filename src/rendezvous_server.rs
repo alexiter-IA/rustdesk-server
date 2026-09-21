@@ -31,6 +31,17 @@ use hbb_common::{
     AddrMangle, ResultType,
 };
 use ipnetwork::Ipv4Network;
+
+// Orbital: clave de operador. Solo los clientes que la envian pueden iniciar
+// conexiones (PunchHoleRequest / RequestRelay). Se lee de la variable de entorno
+// ORBITAL_OP_TOKEN; si esta vacia, el servidor funciona como el original.
+fn orbital_op_token() -> String {
+    static TOKEN: std::sync::OnceLock<String> = std::sync::OnceLock::new();
+    TOKEN
+        .get_or_init(|| std::env::var("ORBITAL_OP_TOKEN").unwrap_or_default())
+        .clone()
+}
+
 use sodiumoxide::crypto::sign;
 use std::{
     collections::HashMap,
@@ -491,6 +502,16 @@ impl RendezvousServer {
                     return true;
                 }
                 Some(rendezvous_message::Union::RequestRelay(mut rf)) => {
+                    // Orbital: mismo control que en PunchHoleRequest, para que no se pueda
+                    // saltar la restriccion pidiendo relay directamente.
+                    if !orbital_op_token().is_empty() && rf.token != orbital_op_token() {
+                        log::warn!(
+                            "Orbital: peticion de relay rechazada desde {} hacia {} (token de operador ausente o invalido)",
+                            addr,
+                            rf.id
+                        );
+                        return true;
+                    }
                     // there maybe several attempt, so sink can be none
                     if let Some(sink) = sink.take() {
                         self.tcp_punch.lock().await.insert(try_into_v4(addr), sink);
@@ -681,6 +702,21 @@ impl RendezvousServer {
         let mut ph = ph;
         if !key.is_empty() && ph.licence_key != key {
             log::warn!("Authentication failed from {} for peer {} - invalid key", addr, ph.id);
+            let mut msg_out = RendezvousMessage::new();
+            msg_out.set_punch_hole_response(PunchHoleResponse {
+                failure: punch_hole_response::Failure::LICENSE_MISMATCH.into(),
+                ..Default::default()
+            });
+            return Ok((msg_out, None));
+        }
+        // Orbital: solo los equipos del operador pueden INICIAR conexiones.
+        // Si ORBITAL_OP_TOKEN no esta definida, el servidor se comporta como el original.
+        if !orbital_op_token().is_empty() && ph.token != orbital_op_token() {
+            log::warn!(
+                "Orbital: peticion de conexion rechazada desde {} hacia {} (token de operador ausente o invalido)",
+                addr,
+                ph.id
+            );
             let mut msg_out = RendezvousMessage::new();
             msg_out.set_punch_hole_response(PunchHoleResponse {
                 failure: punch_hole_response::Failure::LICENSE_MISMATCH.into(),
